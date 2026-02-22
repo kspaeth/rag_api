@@ -192,6 +192,10 @@ GOOGLE_KEY = get_env_variable("GOOGLE_KEY", GOOGLE_API_KEY)
 RAG_GOOGLE_API_KEY = get_env_variable("RAG_GOOGLE_API_KEY", GOOGLE_KEY)
 AWS_SESSION_TOKEN = get_env_variable("AWS_SESSION_TOKEN", "")
 GOOGLE_APPLICATION_CREDENTIALS = get_env_variable("GOOGLE_APPLICATION_CREDENTIALS", "")
+GOOGLE_CLOUD_PROJECT = get_env_variable("GOOGLE_CLOUD_PROJECT", "")
+GOOGLE_CLOUD_LOCATION = get_env_variable("GOOGLE_CLOUD_LOCATION", "us-central1")
+VERTEXAI_TASK_TYPE = get_env_variable("VERTEXAI_TASK_TYPE", None)
+VERTEXAI_OUTPUT_DIMENSIONALITY = get_env_variable("VERTEXAI_OUTPUT_DIMENSIONALITY", None)
 env_value = get_env_variable("RAG_CHECK_EMBEDDING_CTX_LENGTH", "True").lower()
 RAG_CHECK_EMBEDDING_CTX_LENGTH = True if env_value == "true" else False
 
@@ -243,9 +247,46 @@ def init_embeddings(provider, model):
             google_api_key=RAG_GOOGLE_API_KEY,
         )
     elif provider == EmbeddingsProvider.GOOGLE_VERTEXAI:
+        import os
+        import base64
+        import json
+        import tempfile
         from langchain_google_vertexai import VertexAIEmbeddings
 
-        return VertexAIEmbeddings(model=model)
+        # The Python google-auth library requires GOOGLE_APPLICATION_CREDENTIALS to
+        # be a file path. LibreChat passes credentials as base64-encoded JSON content,
+        # so we detect that case, decode it, and write it to a temp file.
+        google_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+        if google_creds and not os.path.isfile(google_creds):
+            content = None
+            try:
+                # Try raw JSON first
+                json.loads(google_creds)
+                content = google_creds
+            except Exception:
+                try:
+                    # Try base64-encoded JSON
+                    content = base64.b64decode(google_creds).decode("utf-8")
+                    json.loads(content)
+                except Exception:
+                    pass
+            if content:
+                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+                tmp.write(content)
+                tmp.close()
+                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
+                logger.info("Decoded GOOGLE_APPLICATION_CREDENTIALS from inline content to temp file")
+
+        kwargs = dict(model=model)
+        if GOOGLE_CLOUD_PROJECT:
+            kwargs["project"] = GOOGLE_CLOUD_PROJECT
+        if GOOGLE_CLOUD_LOCATION:
+            kwargs["location"] = GOOGLE_CLOUD_LOCATION
+        if VERTEXAI_TASK_TYPE:
+            kwargs["task_type"] = VERTEXAI_TASK_TYPE
+        if VERTEXAI_OUTPUT_DIMENSIONALITY:
+            kwargs["output_dimensionality"] = int(VERTEXAI_OUTPUT_DIMENSIONALITY)
+        return VertexAIEmbeddings(**kwargs)
     elif provider == EmbeddingsProvider.BEDROCK:
         from langchain_aws import BedrockEmbeddings
 
@@ -289,7 +330,7 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACETEI:
         "EMBEDDINGS_MODEL", "http://huggingfacetei:3000"
     )
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.GOOGLE_VERTEXAI:
-    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-004")
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "gemini-embedding-001")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.OLLAMA:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.GOOGLE_GENAI:
